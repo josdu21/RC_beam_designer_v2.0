@@ -114,6 +114,23 @@ def render(section):
         st.table(pd.DataFrame(long_data))
         st.info("Torsión despreciable: no se requiere acero longitudinal adicional por torsión.")
 
+    st.subheader("Checklist Flexión (resumen)")
+    st.caption("Resumen por cara: estado, criterio gobernante y alerta de ductilidad.")
+    flex_summary_df = pd.DataFrame(
+        bundle.flexure_summary,
+        columns=[
+            "cara",
+            "estado",
+            "criterio_gobernante",
+            "ductilidad_alerta",
+            "As_min_cm2",
+            "As_design_cm2",
+            "phi",
+            "epsilon_t",
+        ],
+    )
+    st.table(flex_summary_df)
+
     # ──────────────────────────────────────────────────────────────
     # 2. REFUERZO TRANSVERSAL
     # ──────────────────────────────────────────────────────────────
