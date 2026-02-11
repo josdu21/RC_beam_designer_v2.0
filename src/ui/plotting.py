@@ -76,32 +76,33 @@ def draw_beam_section_shear(b, h, cover, s_req, n_legs):
 
 def draw_beam_section_torsion(b, h, cover, al_total, n_long_bars=6):
     """Draw cross section with closed stirrups and longitudinal bars distributed on perimeter."""
-    fig, ax = plt.subplots(figsize=(4, 4))
+    fig, ax = plt.subplots(figsize=(2.5, 3))
 
     # Outer section
-    rect = patches.Rectangle((0, 0), b, h, linewidth=2, edgecolor='#333333', facecolor='#e0e0e0')
+    rect = patches.Rectangle((0, 0), b, h, linewidth=1.5, edgecolor='#333333', facecolor='#e0e0e0')
     ax.add_patch(rect)
 
     # Closed stirrup
     stirrup = patches.Rectangle(
         (cover, cover), b - 2*cover, h - 2*cover,
-        linewidth=2.5, edgecolor='#7b1fa2', facecolor='none'
+        linewidth=2, edgecolor='#7b1fa2', facecolor='none'
     )
     ax.add_patch(stirrup)
 
     # Distribute longitudinal bars on perimeter
     positions = _distribute_bars_on_perimeter(b, h, cover, n_long_bars)
     for (x, y) in positions:
-        ax.plot(x, y, 'ro', markersize=7, markeredgecolor='darkred', markerfacecolor='red')
+        ax.plot(x, y, 'ro', markersize=5, markeredgecolor='darkred', markerfacecolor='red')
 
     # Label
     if al_total > 0:
-        ax.text(b / 2, -3, f"Al total: {al_total:.2f} cm2", ha='center', fontsize=8, color='darkred')
+        ax.text(b / 2, -3, f"Al: {al_total:.2f} cm2", ha='center', fontsize=7, color='darkred')
 
-    ax.set_xlim(-5, b + 5)
-    ax.set_ylim(-7, h + 5)
+    ax.set_xlim(-4, b + 4)
+    ax.set_ylim(-5, h + 4)
     ax.set_aspect('equal')
     ax.axis('off')
+    fig.tight_layout()
     return fig
 
 
