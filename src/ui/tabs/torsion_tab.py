@@ -118,11 +118,9 @@ def render(section):
 
         # Visualization
         st.subheader("Esquema")
-        _, col_fig, _ = st.columns([1, 2, 1])
-        with col_fig:
-            fig = plotting.draw_beam_section_torsion(
-                section.b, section.h, section.cover,
-                al_total=al_total,
-                n_long_bars=st.session_state.get("al_torsion_n_bars", 6)
-            )
-            st.pyplot(fig)
+        fig = plotting.draw_beam_section_torsion(
+            section.b, section.h, section.cover,
+            al_total=al_total,
+            n_long_bars=st.session_state.get("al_torsion_n_bars", 6)
+        )
+        st.pyplot(fig, use_container_width=False)
