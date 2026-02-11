@@ -8,10 +8,10 @@ def render(section):
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("⬇️ Refuerzo Inferior (+)")
-        mu_pos = st.number_input("Momento Positivo (+Mu) [kNm]", 0.0, None, 100.0, 10.0)
+        mu_pos = st.number_input("Momento Positivo (+Mu) [kNm]", 0.0, None, 100.0, 10.0, key="mu_pos")
     with col2:
         st.subheader("⬆️ Refuerzo Superior (-)")
-        mu_neg = st.number_input("Momento Negativo (-Mu) [kNm]", 0.0, None, 0.0, 10.0)
+        mu_neg = st.number_input("Momento Negativo (-Mu) [kNm]", 0.0, None, 0.0, 10.0, key="mu_neg")
         
     res_bot = flexure.calculate_flexure(section, mu_pos)
     res_top = flexure.calculate_flexure(section, mu_neg)

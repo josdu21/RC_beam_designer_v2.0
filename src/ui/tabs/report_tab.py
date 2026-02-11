@@ -3,81 +3,79 @@ import pandas as pd
 from src.models import flexure, shear, torsion
 
 def render(section):
-    st.header("📄 Reporte Resumen de Diseño")
-    
-    # Re-calculate everything based on current session state inputs? 
-    # Ideally, we should pull from session state, but for simplicity we rely on inputs
-    # generated in other tabs being stored in session_state if we used keys.
-    # Since we didn't use keys in previous steps, we can't pull exact values easily without global state.
-    # TO FIX: We will instruct user that this report generates a sample based on default or 
-    # we need to refactor inputs to use st.session_state.
-    
-    st.info("Nota: Para un reporte preciso, asegúrese de haber ingresado las cargas en las pestañas respectivas.")
-    
-    # Let's create a summary table that allows re-inputting key loads for the report
-    # or assumes a "Case Study" mode.
-    # Better approach: Add inputs here for the "Design Case" to summarize.
-    
-    md_col1, md_col2, md_col3 = st.columns(3)
-    with md_col1:
-        mu_pos = st.number_input("Mu+ [kNm]", 0.0, None, 100.0, key="rep_mu_pos")
-    with md_col2:
-        vu = st.number_input("Vu [kN]", 0.0, None, 50.0, key="rep_vu")
-    with md_col3:
-        tu = st.number_input("Tu [kNm]", 0.0, None, 15.0, key="rep_tu")
-        
+    st.header("Reporte Resumen de Diseno")
+
+    # Read values from session state (set by other tabs via key= parameter)
+    mu_pos = st.session_state.get("mu_pos", 100.0)
+    mu_neg = st.session_state.get("mu_neg", 0.0)
+    vu = st.session_state.get("Vu", 50.0)
+    tu = st.session_state.get("Tu", 15.0)
+    vu_torsion = st.session_state.get("Vu_torsion", vu)
+
+    # Show current design loads as read-only summary
+    st.subheader("Cargas de Diseno")
+    st.caption("Valores tomados de las pestanas de diseno. Modifiquelos en sus pestanas respectivas.")
+
+    lc1, lc2, lc3, lc4 = st.columns(4)
+    lc1.metric("Mu+ [kNm]", f"{mu_pos:.1f}")
+    lc2.metric("Mu- [kNm]", f"{mu_neg:.1f}")
+    lc3.metric("Vu [kN]", f"{vu:.1f}")
+    lc4.metric("Tu [kNm]", f"{tu:.1f}")
+
+    st.divider()
+
     # Run Calculations
-    res_flex = flexure.calculate_flexure(section, mu_pos)
+    res_flex_pos = flexure.calculate_flexure(section, mu_pos)
+    res_flex_neg = flexure.calculate_flexure(section, mu_neg)
     res_shear = shear.calculate_shear(section, vu)
-    res_tors = torsion.calculate_torsion(section, tu, vu)
-    
+    res_tors = torsion.calculate_torsion(section, tu, vu_torsion)
+
     st.subheader("1. Refuerzo Longitudinal")
-    
+
+    al_torsion = res_tors.get('Al_req', 0)
+
     long_data = {
-        "Ubicación": ["Inferior (Flexión)", "Superior (Flexión)", "Longitudinal Torsión (Total)", "TOTAL Inferior Estimado"],
-        "As Requerdio (cm²)": [
-            f"{res_flex['As_design']:.2f}",
-            "0.00", # Placeholder as we asked only mu_pos
-            f"{res_tors.get('Al_req', 0):.2f}",
-            f"{(res_flex['As_design'] + res_tors.get('Al_req', 0)/3):.2f} *" # Rough estimate 1/3 Al bottom
+        "Ubicacion": [
+            "Inferior (Flexion +)",
+            "Superior (Flexion -)",
+            "Longitudinal Torsion (Total)",
+            "TOTAL Inferior Estimado"
         ],
-        "Comentarios": [res_flex['status'], "-", "Distribuir en perímetro", "* Asumiendo 1/3 Al abajo"]
+        "As Requerido (cm2)": [
+            f"{res_flex_pos['As_design']:.2f}",
+            f"{res_flex_neg['As_design']:.2f}",
+            f"{al_torsion:.2f}",
+            f"{(res_flex_pos['As_design'] + al_torsion / 3):.2f} *"
+        ],
+        "Comentarios": [
+            res_flex_pos['status'],
+            res_flex_neg['status'] if mu_neg > 0 else "Sin momento negativo",
+            "Distribuir en perimetro",
+            "* Asumiendo 1/3 Al abajo"
+        ]
     }
     st.table(pd.DataFrame(long_data))
-    
+
     st.subheader("2. Refuerzo Transversal (Estribos)")
-    
-    # Calculate combined Av/s
-    # Av/s_total = (Av/s)_shear + 2 * (At/s)_torsion
-    # Shear result gives s_req for a specific bar.
-    # Let's compute (Av/s) ratio provided vs required.
-    
-    # Shear Av/s req = Vs / (fy * d)  (Simplified)
-    # Torsion 2*At/s 
-    
+
     st.write(f"**Cortante Vs:** {res_shear.get('Vs_req', 0):.2f} kN")
-    
+
     if "Neglectable" in res_tors['status']:
-        st.success("Torsión despreciable. Diseñar solo por Cortante.")
-        st.metric("Separación Estribos (Cortante)", f"{res_shear.get('s_req', 0):.1f} cm")
+        st.success("Torsion despreciable. Disenar solo por Cortante.")
+        s_req = res_shear.get('s_req')
+        if s_req is not None:
+            st.metric("Separacion Estribos (Cortante)", f"{s_req:.1f} cm")
+        else:
+            st.info(res_shear['status'])
     elif "Error" in res_tors['status']:
-        st.error("Error en Torsión: " + res_tors['status'])
+        st.error("Error en Torsion: " + res_tors['status'])
     else:
-        st.warning("Torsión Significativa. Se requieren estribos cerrados.")
-        # Calculate combined spacing for a chosen bar
-        bar_diam = 0.95 # #3
-        Av_bar = 0.71 # cm2
-        
-        # Area per leg for shear = Av_shear / 2 legs
-        # Area per leg for torsion = At
-        
-        # Better: Calculate required (Area/spacing) TOTAL per leg
-        # (Av+t / s) = (Av/s)/2 + (At/s)
-        
-        # From shear module we have s_req for 2 legs.
-        # Av_shear_total / s_shear = Vs / (fyd)
-        
-        # Let's show data
+        st.warning("Torsion Significativa. Se requieren estribos cerrados.")
+
         col_res1, col_res2 = st.columns(2)
-        col_res1.metric("Estribos por Cortante", f"s = {res_shear.get('s_req', 0):.1f} cm")
-        col_res2.metric("Refuerzo Torsión (At/s)", f"{res_tors.get('At_s_req', 0):.4f} mm²/mm")
+        s_req = res_shear.get('s_req')
+        if s_req is not None:
+            col_res1.metric("Estribos por Cortante", f"s = {s_req:.1f} cm")
+        else:
+            col_res1.info(res_shear['status'])
+        col_res2.metric("Refuerzo Torsion (At/s)", f"{res_tors.get('At_s_req_cm2_m', 0):.2f} cm2/m")

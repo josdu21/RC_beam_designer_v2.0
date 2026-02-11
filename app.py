@@ -1,13 +1,12 @@
+import logging
 import streamlit as st
-import os
 from src.models.section import BeamSection
 from src.ui.tabs import flexure_tab, shear_tab, torsion_tab, report_tab
 
+logging.basicConfig(level=logging.INFO, format="%(name)s - %(levelname)s - %(message)s")
+
 # Page Config
 st.set_page_config(page_title="RC Beam Designer Modular", page_icon="🏗️", layout="wide")
-
-# CSS handled by .streamlit/config.toml
-# def local_css(file_name): ...
 
 # Sidebar (Global Inputs)
 st.sidebar.title("Configuración Global")
@@ -22,7 +21,11 @@ h = st.sidebar.number_input("Altura h [cm]", 15.0, 300.0, 50.0)
 cover = st.sidebar.number_input("Recubrimiento [cm]", 2.0, 10.0, 4.0)
 
 # Create Section Object
-section = BeamSection(b, h, fc, fy, cover)
+try:
+    section = BeamSection(b, h, fc, fy, cover)
+except ValueError as e:
+    st.sidebar.error(str(e))
+    st.stop()
 
 # Main App
 st.title("🏗️ Diseñador de Vigas RC - Modular")
