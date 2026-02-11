@@ -1,0 +1,4 @@
+interface:
+  display_name: "ACI 318 Vigas RC"
+  short_description: "Checklist ACI 318-19 para vigas RC"
+  default_prompt: "Usa $aci318-vigas-rc para revisar una viga de concreto reforzado con checklist y trazabilidad normativa ACI 318-19."
