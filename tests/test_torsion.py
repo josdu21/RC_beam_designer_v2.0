@@ -1,4 +1,5 @@
 import pytest
+
 from src.models.section import BeamSection
 from src.models.torsion import calculate_torsion
 
@@ -28,19 +29,19 @@ class TestTorsion:
     def test_all_keys_on_negligible(self, standard_section):
         res = calculate_torsion(standard_section, Tu=1.0, Vu=10.0)
         expected = {'Tu', 'T_th', 'phi_T_th', 'T_cr', 'phi_T_cr', 'status',
-                    'At_s_req', 'At_s_req_cm2_m', 'Al_req', 'check_cross_section', 'action'}
+                    'status_code', 'At_s_req', 'At_s_req_cm2_m', 'Al_req', 'check_cross_section', 'action', 'trace'}
         assert expected == set(res.keys())
 
     def test_all_keys_on_required(self, standard_section):
         res = calculate_torsion(standard_section, Tu=20.0, Vu=50.0)
         expected = {'Tu', 'T_th', 'phi_T_th', 'T_cr', 'phi_T_cr', 'status',
-                    'At_s_req', 'At_s_req_cm2_m', 'Al_req', 'check_cross_section', 'action'}
+                    'status_code', 'At_s_req', 'At_s_req_cm2_m', 'Al_req', 'check_cross_section', 'action', 'trace'}
         assert expected == set(res.keys())
 
     def test_all_keys_on_error(self, standard_section):
         res = calculate_torsion(standard_section, Tu=100.0, Vu=500.0)
         expected = {'Tu', 'T_th', 'phi_T_th', 'T_cr', 'phi_T_cr', 'status',
-                    'At_s_req', 'At_s_req_cm2_m', 'Al_req', 'check_cross_section', 'action'}
+                    'status_code', 'At_s_req', 'At_s_req_cm2_m', 'Al_req', 'check_cross_section', 'action', 'trace'}
         assert expected == set(res.keys())
 
     def test_section_too_small_for_cover(self):
@@ -75,3 +76,9 @@ class TestTorsion:
         res = calculate_torsion(section, Tu=20.0, Vu=50.0)
         assert 'status' in res
         assert res['T_th'] > 0
+
+    def test_status_code_and_trace_present(self, standard_section):
+        res = calculate_torsion(standard_section, Tu=-20.0, Vu=-50.0)
+        assert res['status_code'] in {'ok', 'warning', 'error'}
+        assert isinstance(res['trace'], list)
+        assert len(res['trace']) >= 1

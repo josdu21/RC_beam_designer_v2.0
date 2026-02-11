@@ -1,7 +1,6 @@
 from __future__ import annotations
-from src.models.aci_constants import (
-    BETA1_HIGH, BETA1_LOW, FC_BETA1_UPPER, FC_BETA1_LOWER
-)
+
+from src.models.aci_constants import BETA1_HIGH, BETA1_LOW, FC_BETA1_LOWER, FC_BETA1_UPPER
 
 
 class BeamSection:

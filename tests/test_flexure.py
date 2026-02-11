@@ -1,6 +1,7 @@
 import pytest
-from src.models.section import BeamSection
+
 from src.models.flexure import calculate_flexure
+from src.models.section import BeamSection
 
 
 @pytest.fixture
@@ -35,13 +36,25 @@ class TestFlexure:
 
     def test_all_keys_present_on_success(self, standard_section):
         res = calculate_flexure(standard_section, 100)
-        expected_keys = {'As_calc', 'As_min', 'As_design', 'rho', 'phi', 'epsilon_t', 'status', 'c', 'a'}
+        expected_keys = {
+            'As_calc', 'As_min', 'As_design', 'rho', 'phi', 'epsilon_t',
+            'status', 'status_code', 'c', 'a', 'trace'
+        }
         assert expected_keys == set(res.keys())
 
     def test_all_keys_present_on_error(self, standard_section):
         res = calculate_flexure(standard_section, 1000)
-        expected_keys = {'As_calc', 'As_min', 'As_design', 'rho', 'phi', 'epsilon_t', 'status', 'c', 'a'}
+        expected_keys = {
+            'As_calc', 'As_min', 'As_design', 'rho', 'phi', 'epsilon_t',
+            'status', 'status_code', 'c', 'a', 'trace'
+        }
         assert expected_keys == set(res.keys())
+
+    def test_status_code_and_trace_present(self, standard_section):
+        res = calculate_flexure(standard_section, -100)
+        assert res['status_code'] in {'ok', 'warning', 'error'}
+        assert isinstance(res['trace'], list)
+        assert len(res['trace']) >= 1
 
     def test_hand_calc_validation(self):
         """Validate against known: 30x50cm, fc=28, fy=420, Mu=150kNm -> As ~9-10 cm2."""

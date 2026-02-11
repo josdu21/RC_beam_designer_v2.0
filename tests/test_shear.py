@@ -1,4 +1,5 @@
 import pytest
+
 from src.models.section import BeamSection
 from src.models.shear import calculate_shear
 
@@ -28,12 +29,12 @@ class TestShear:
 
     def test_all_keys_present(self, standard_section):
         res = calculate_shear(standard_section, 100)
-        expected = {'Vc', 'phi_Vc', 'Vs_req', 's_req', 's_max', 'status', 'Av', 'Av_bar_cm2'}
+        expected = {'Vc', 'phi_Vc', 'Vs_req', 's_req', 's_max', 'status', 'status_code', 'Av', 'Av_bar_cm2', 'trace'}
         assert expected == set(res.keys())
 
     def test_all_keys_on_no_stirrups(self, standard_section):
         res = calculate_shear(standard_section, 5)
-        expected = {'Vc', 'phi_Vc', 'Vs_req', 's_req', 's_max', 'status', 'Av', 'Av_bar_cm2'}
+        expected = {'Vc', 'phi_Vc', 'Vs_req', 's_req', 's_max', 'status', 'status_code', 'Av', 'Av_bar_cm2', 'trace'}
         assert expected == set(res.keys())
 
     def test_negative_vu_uses_abs(self, standard_section):
@@ -59,3 +60,9 @@ class TestShear:
         res = calculate_shear(standard_section, Vu)
         assert res['Vc'] > 0
         assert 'status' in res
+
+    def test_status_code_and_trace_present(self, standard_section):
+        res = calculate_shear(standard_section, -100)
+        assert res['status_code'] in {'ok', 'warning', 'error'}
+        assert isinstance(res['trace'], list)
+        assert len(res['trace']) >= 1

@@ -1,13 +1,23 @@
 from __future__ import annotations
+
 import logging
 import math
 from typing import TYPE_CHECKING
 
 from src.models.aci_constants import (
-    LAMBDA_NWC, VC_COEFF, T_TH_COEFF, T_CR_COEFF, CROSS_SECTION_COEFF,
-    TORSION_STRESS_COEFF, AO_FACTOR, AL_MIN_COEFF, PHI_TORSION
+    AL_MIN_COEFF,
+    AO_FACTOR,
+    CROSS_SECTION_COEFF,
+    LAMBDA_NWC,
+    PHI_TORSION,
+    T_CR_COEFF,
+    T_TH_COEFF,
+    TORSION_STRESS_COEFF,
+    VC_COEFF,
 )
-from src.models.units import kNm_to_Nmm, kN_to_N, cm_to_mm, mm2_to_cm2, Nmm_to_kNm
+from src.models.result_types import TorsionResult, TraceCheck
+from src.models.units import Nmm_to_kNm, cm_to_mm, kN_to_N, kNm_to_Nmm, mm2_to_cm2
+from src.models.validation import normalize_load_with_policy, validate_section_geometry
 
 if TYPE_CHECKING:
     from src.models.section import BeamSection
@@ -74,17 +84,26 @@ def _compute_longitudinal_reinf(At_s_req: float, Ph: float, fy: float,
     return max(Al_req, Al_min)
 
 
-def _make_default_results(Tu: float) -> dict:
-    """Create a default results dict with all expected keys."""
-    return {
-        "Tu": Tu, "T_th": 0.0, "phi_T_th": 0.0, "T_cr": 0.0, "phi_T_cr": 0.0,
-        "status": "OK",
-        "At_s_req": 0.0, "At_s_req_cm2_m": 0.0, "Al_req": 0.0,
-        "check_cross_section": "OK", "action": ""
-    }
+def _make_default_results(Tu: float, trace: list[TraceCheck] | None = None) -> TorsionResult:
+    """Create a default result object with all expected keys."""
+    return TorsionResult(
+        Tu=Tu,
+        T_th=0.0,
+        phi_T_th=0.0,
+        T_cr=0.0,
+        phi_T_cr=0.0,
+        status="OK",
+        status_code="ok",
+        At_s_req=0.0,
+        At_s_req_cm2_m=0.0,
+        Al_req=0.0,
+        check_cross_section="OK",
+        action="",
+        trace=trace or [],
+    )
 
 
-def calculate_torsion(section: BeamSection, Tu: float, Vu: float) -> dict:
+def calculate_torsion(section: BeamSection, Tu: float, Vu: float) -> TorsionResult:
     """
     Check torsion threshold and calculate reinforcement if required (ACI 318-19).
 
@@ -99,8 +118,25 @@ def calculate_torsion(section: BeamSection, Tu: float, Vu: float) -> dict:
     """
     logger.info("Torsion calc: Tu=%.2f kNm, Vu=%.2f kN", Tu, Vu)
 
-    Tu_Nmm = kNm_to_Nmm(Tu)
-    Vu_N = kN_to_N(Vu)
+    errors = validate_section_geometry(section)
+    if errors:
+        return TorsionResult(
+            Tu=Tu,
+            status=f"Error: {' | '.join(errors)}",
+            status_code="error",
+            check_cross_section="N/A",
+        )
+
+    Tu_norm, tu_trace = normalize_load_with_policy(Tu, "Tu")
+    Vu_norm, vu_trace = normalize_load_with_policy(Vu, "Vu")
+    trace: list[TraceCheck] = []
+    if tu_trace:
+        trace.append(tu_trace)
+    if vu_trace:
+        trace.append(vu_trace)
+
+    Tu_Nmm = kNm_to_Nmm(Tu_norm)
+    Vu_N = kN_to_N(Vu_norm)
     fc = section.fc
     fy = section.fy
 
@@ -109,10 +145,21 @@ def calculate_torsion(section: BeamSection, Tu: float, Vu: float) -> dict:
 
     if sp["x1"] <= 0 or sp["y1"] <= 0:
         logger.error("Section too small for torsion cover: x1=%.1f, y1=%.1f", sp["x1"], sp["y1"])
-        results = _make_default_results(Tu)
-        results["status"] = "Error: Section too small for defined cover to calculate Aoh."
-        results["check_cross_section"] = "N/A"
-        results["action"] = "Increase section or reduce cover"
+        results = _make_default_results(Tu_norm, trace)
+        results.status = "Error: Section too small for defined cover to calculate Aoh."
+        results.status_code = "error"
+        results.check_cross_section = "N/A"
+        results.action = "Increase section or reduce cover"
+        trace.append(
+            TraceCheck(
+                code_ref="ACI 318-19 Section 22.7",
+                formula_id="Aoh_validity",
+                inputs={"x1_mm": sp["x1"], "y1_mm": sp["y1"]},
+                value=0.0,
+                units="mm2",
+                status="error",
+            )
+        )
         return results
 
     # Threshold and cracking torsion
@@ -120,16 +167,27 @@ def calculate_torsion(section: BeamSection, Tu: float, Vu: float) -> dict:
     T_th = T_TH_COEFF * torsion_factor
     T_cr = T_CR_COEFF * torsion_factor
 
-    results = _make_default_results(Tu)
-    results["T_th"] = Nmm_to_kNm(T_th)
-    results["phi_T_th"] = Nmm_to_kNm(PHI_TORSION * T_th)
-    results["T_cr"] = Nmm_to_kNm(T_cr)
-    results["phi_T_cr"] = Nmm_to_kNm(PHI_TORSION * T_cr)
+    results = _make_default_results(Tu_norm, trace)
+    results.T_th = Nmm_to_kNm(T_th)
+    results.phi_T_th = Nmm_to_kNm(PHI_TORSION * T_th)
+    results.T_cr = Nmm_to_kNm(T_cr)
+    results.phi_T_cr = Nmm_to_kNm(PHI_TORSION * T_cr)
+    trace.append(
+        TraceCheck(
+            code_ref="ACI 318-19 Section 22.7",
+            formula_id="T_th",
+            inputs={"fc_MPa": fc, "Acp_mm2": sp["Acp"], "Pcp_mm": sp["Pcp"]},
+            value=T_th,
+            units="Nmm",
+            status="ok",
+        )
+    )
 
     # 1. Neglect torsion check
     if Tu_Nmm < PHI_TORSION * T_th:
-        results["status"] = "Torsion Neglectable (Tu < phi * T_th)"
-        results["action"] = "No Torsion Design Needed"
+        results.status = "Torsion Neglectable (Tu < phi * T_th)"
+        results.status_code = "ok"
+        results.action = "No Torsion Design Needed"
         return results
 
     # 2. Cross-section adequacy check
@@ -139,23 +197,56 @@ def calculate_torsion(section: BeamSection, Tu: float, Vu: float) -> dict:
     adequate, check_msg = _check_cross_section(
         Vu_N, Tu_Nmm, sp["b_mm"], d_mm, fc, sp["Ph"], sp["Aoh"], Vc
     )
-    results["check_cross_section"] = check_msg
+    results.check_cross_section = check_msg
+    trace.append(
+        TraceCheck(
+            code_ref="ACI 318-19 22.7.7.1",
+            formula_id="combined_shear_torsion_stress",
+            inputs={"Vu_N": Vu_N, "Tu_Nmm": Tu_Nmm},
+            value=1.0 if adequate else 0.0,
+            units="pass_fail",
+            status="ok" if adequate else "error",
+            note=check_msg,
+        )
+    )
 
     if not adequate:
         logger.warning("Cross-section inadequate: %s", check_msg)
-        results["status"] = "Error: Cross-Section Too Small for Torsion+Shear!"
+        results.status = "Error: Cross-Section Too Small for Torsion+Shear!"
+        results.status_code = "error"
         return results
 
     # 3. Transverse reinforcement At/s
     At_s_req = _compute_transverse_reinf(Tu_Nmm, sp["Aoh"], fy)
-    results["At_s_req"] = At_s_req  # mm2/mm
-    results["At_s_req_cm2_m"] = At_s_req * 10  # cm2/m
+    results.At_s_req = At_s_req  # mm2/mm
+    results.At_s_req_cm2_m = At_s_req * 10  # cm2/m
+    trace.append(
+        TraceCheck(
+            code_ref="ACI 318-19 Section 22.7",
+            formula_id="At_over_s",
+            inputs={"Tu_Nmm": Tu_Nmm, "Aoh_mm2": sp["Aoh"], "fy_MPa": fy},
+            value=At_s_req,
+            units="mm2/mm",
+            status="ok",
+        )
+    )
 
     # 4. Longitudinal reinforcement Al
     Al_final = _compute_longitudinal_reinf(At_s_req, sp["Ph"], fy, fc, sp["Acp"])
-    results["Al_req"] = mm2_to_cm2(Al_final)  # cm2
+    results.Al_req = mm2_to_cm2(Al_final)  # cm2
+    trace.append(
+        TraceCheck(
+            code_ref="ACI 318-19 Eq 9.6.4.3(a)",
+            formula_id="Al_min_and_required",
+            inputs={"At_s_mm2_per_mm": At_s_req, "Ph_mm": sp["Ph"], "Acp_mm2": sp["Acp"]},
+            value=Al_final,
+            units="mm2",
+            status="ok",
+        )
+    )
 
-    results["status"] = "Torsion Reinforcement Required"
-    results["action"] = "Provide Closed Stirrups + Longitudinal Bars"
+    results.status = "Torsion Reinforcement Required"
+    results.status_code = "warning"
+    results.action = "Provide Closed Stirrups + Longitudinal Bars"
 
     return results

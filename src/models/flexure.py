@@ -1,13 +1,22 @@
 from __future__ import annotations
+
 import logging
 import math
 from typing import TYPE_CHECKING
 
 from src.models.aci_constants import (
-    PHI_TENSION, PHI_COMPRESSION, EPSILON_T_TENSION, EPSILON_T_COMPRESSION,
-    EPSILON_CU, WHITNEY_COEFF, MIN_RHO_COEFF_1, MIN_RHO_COEFF_2
+    EPSILON_CU,
+    EPSILON_T_COMPRESSION,
+    EPSILON_T_TENSION,
+    MIN_RHO_COEFF_1,
+    MIN_RHO_COEFF_2,
+    PHI_COMPRESSION,
+    PHI_TENSION,
+    WHITNEY_COEFF,
 )
-from src.models.units import kNm_to_Nmm, cm_to_mm, mm2_to_cm2, mm_to_cm
+from src.models.result_types import FlexureResult, TraceCheck
+from src.models.units import cm_to_mm, kNm_to_Nmm, mm2_to_cm2, mm_to_cm
+from src.models.validation import normalize_load_with_policy, validate_section_geometry
 
 if TYPE_CHECKING:
     from src.models.section import BeamSection
@@ -78,7 +87,7 @@ def _iterate_phi(section: BeamSection, Mu_Nmm: float, b_mm: float, d_mm: float,
     }
 
 
-def calculate_flexure(section: BeamSection, Mu: float) -> dict:
+def calculate_flexure(section: BeamSection, Mu: float) -> FlexureResult:
     """
     Calculate required reinforcement for a given ultimate moment.
 
@@ -91,32 +100,80 @@ def calculate_flexure(section: BeamSection, Mu: float) -> dict:
     """
     logger.info("Flexure calc: Mu=%.2f kNm, b=%.1f h=%.1f", Mu, section.b, section.h)
 
-    Mu_Nmm = kNm_to_Nmm(Mu)
+    errors = validate_section_geometry(section)
+    if errors:
+        return FlexureResult(
+            status=f"Error: {' | '.join(errors)}",
+            status_code="error",
+            phi=PHI_COMPRESSION,
+        )
+
+    Mu_norm, input_trace = normalize_load_with_policy(Mu, "Mu")
+    trace: list[TraceCheck] = []
+    if input_trace:
+        trace.append(input_trace)
+
+    Mu_Nmm = kNm_to_Nmm(Mu_norm)
     b_mm = cm_to_mm(section.b)
     d_mm = cm_to_mm(section.d)
     fc = section.fc
     fy = section.fy
 
     As_min = _compute_As_min(fc, fy, b_mm, d_mm)
+    trace.append(
+        TraceCheck(
+            code_ref="ACI 318-19 Table 9.6.1.2",
+            formula_id="As_min",
+            inputs={"fc_MPa": fc, "fy_MPa": fy, "b_mm": b_mm, "d_mm": d_mm},
+            value=As_min,
+            units="mm2",
+            status="ok",
+        )
+    )
 
     # Negligible moment
     if Mu_Nmm < 1e-6:
-        return {
-            "As_calc": 0.0, "As_min": mm2_to_cm2(As_min),
-            "As_design": mm2_to_cm2(As_min),
-            "rho": 0.0, "phi": PHI_TENSION, "epsilon_t": 1.0,
-            "status": "OK (Min Steel)", "c": 0.0, "a": 0.0
-        }
+        return FlexureResult(
+            As_calc=0.0,
+            As_min=mm2_to_cm2(As_min),
+            As_design=mm2_to_cm2(As_min),
+            rho=0.0,
+            phi=PHI_TENSION,
+            epsilon_t=1.0,
+            status="OK (Min Steel)",
+            status_code="ok",
+            c=0.0,
+            a=0.0,
+            trace=trace,
+        )
 
     result = _iterate_phi(section, Mu_Nmm, b_mm, d_mm, fc, fy)
 
     if result["error"]:
-        return {
-            "As_calc": 0.0, "As_min": mm2_to_cm2(As_min), "As_design": 0.0,
-            "rho": 0.0, "phi": result["phi"], "epsilon_t": 0.0,
-            "status": "Error: Section Overloaded (Compression Failure)",
-            "c": 0.0, "a": 0.0
-        }
+        trace.append(
+            TraceCheck(
+                code_ref="ACI 318-19 Section 22.2",
+                formula_id="phiMn_quadratic_discriminant",
+                inputs={"Mu_Nmm": Mu_Nmm},
+                value=result["phi"],
+                units="phi",
+                status="error",
+                note="Negative discriminant in flexure quadratic.",
+            )
+        )
+        return FlexureResult(
+            As_calc=0.0,
+            As_min=mm2_to_cm2(As_min),
+            As_design=0.0,
+            rho=0.0,
+            phi=result["phi"],
+            epsilon_t=0.0,
+            status="Error: Section Overloaded (Compression Failure)",
+            status_code="error",
+            c=0.0,
+            a=0.0,
+            trace=trace,
+        )
 
     As_req = result["As_req"]
     epsilon_t = result["epsilon_t"]
@@ -125,20 +182,36 @@ def calculate_flexure(section: BeamSection, Mu: float) -> dict:
     c = result["c"]
 
     status = "OK"
+    status_code = "ok"
     if epsilon_t < 0.004:
         status = "Warning: Low Ductility (epsilon_t < 0.004)"
+        status_code = "warning"
         logger.warning("Low ductility: epsilon_t=%.5f", epsilon_t)
     elif epsilon_t < EPSILON_T_TENSION:
         status = "Transition Zone (epsilon_t < 0.005)"
+        status_code = "warning"
 
-    return {
-        "As_calc": mm2_to_cm2(As_req),
-        "As_min": mm2_to_cm2(As_min),
-        "As_design": mm2_to_cm2(max(As_req, As_min)),
-        "rho": As_req / (b_mm * d_mm),
-        "phi": phi,
-        "epsilon_t": epsilon_t,
-        "status": status,
-        "c": mm_to_cm(c),
-        "a": mm_to_cm(a)
-    }
+    trace.append(
+        TraceCheck(
+            code_ref="ACI 318-19 Section 21.2.2",
+            formula_id="phi_strain_classification",
+            inputs={"epsilon_t": epsilon_t},
+            value=phi,
+            units="phi",
+            status=status_code,
+        )
+    )
+
+    return FlexureResult(
+        As_calc=mm2_to_cm2(As_req),
+        As_min=mm2_to_cm2(As_min),
+        As_design=mm2_to_cm2(max(As_req, As_min)),
+        rho=As_req / (b_mm * d_mm),
+        phi=phi,
+        epsilon_t=epsilon_t,
+        status=status,
+        status_code=status_code,
+        c=mm_to_cm(c),
+        a=mm_to_cm(a),
+        trace=trace,
+    )

@@ -1,13 +1,23 @@
 from __future__ import annotations
+
 import logging
 import math
 from typing import TYPE_CHECKING
 
 from src.models.aci_constants import (
-    LAMBDA_NWC, VC_COEFF, VS_MAX_COEFF, VS_HALF_COEFF,
-    AV_MIN_COEFF_1, AV_MIN_COEFF_2, PHI_SHEAR, S_MAX_NORMAL, S_MAX_HEAVY
+    AV_MIN_COEFF_1,
+    AV_MIN_COEFF_2,
+    LAMBDA_NWC,
+    PHI_SHEAR,
+    S_MAX_HEAVY,
+    S_MAX_NORMAL,
+    VC_COEFF,
+    VS_HALF_COEFF,
+    VS_MAX_COEFF,
 )
-from src.models.units import kN_to_N, cm_to_mm, N_to_kN, mm_to_cm, mm2_to_cm2
+from src.models.result_types import ShearResult, TraceCheck
+from src.models.units import N_to_kN, cm_to_mm, kN_to_N, mm2_to_cm2, mm_to_cm
+from src.models.validation import normalize_load_with_policy, validate_section_geometry
 
 if TYPE_CHECKING:
     from src.models.section import BeamSection
@@ -53,7 +63,7 @@ def _compute_spacing(Av: float, fy: float, d_mm: float, Vs_req: float,
 
 
 def calculate_shear(section: BeamSection, Vu: float, n_legs: int = 2,
-                    stirrup_diameter: float = 0.95) -> dict:
+                    stirrup_diameter: float = 0.95) -> ShearResult:
     """
     Calculate shear reinforcement (stirrups) per ACI 318-19 Simplified Method.
 
@@ -68,7 +78,19 @@ def calculate_shear(section: BeamSection, Vu: float, n_legs: int = 2,
     """
     logger.info("Shear calc: Vu=%.2f kN, b=%.1f d=%.1f", Vu, section.b, section.d)
 
-    Vu_N = kN_to_N(Vu)
+    errors = validate_section_geometry(section)
+    if errors:
+        return ShearResult(
+            status=f"Error: {' | '.join(errors)}",
+            status_code="error",
+        )
+
+    Vu_norm, input_trace = normalize_load_with_policy(Vu, "Vu")
+    trace: list[TraceCheck] = []
+    if input_trace:
+        trace.append(input_trace)
+
+    Vu_N = kN_to_N(Vu_norm)
     b_mm = cm_to_mm(section.b)
     d_mm = cm_to_mm(section.d)
     fc = section.fc
@@ -76,41 +98,105 @@ def calculate_shear(section: BeamSection, Vu: float, n_legs: int = 2,
 
     Vc = _compute_Vc(fc, b_mm, d_mm)
     phi_Vc = PHI_SHEAR * Vc
+    trace.append(
+        TraceCheck(
+            code_ref="ACI 318-19 Section 22.5",
+            formula_id="Vc_simplified",
+            inputs={"fc_MPa": fc, "bw_mm": b_mm, "d_mm": d_mm},
+            value=Vc,
+            units="N",
+            status="ok",
+        )
+    )
 
     Av_bar, Av = _compute_stirrup_area(stirrup_diameter, n_legs)
 
     # No stirrups needed
     if Vu_N <= 0.5 * phi_Vc:
-        return {
-            "Vc": N_to_kN(Vc), "phi_Vc": N_to_kN(phi_Vc),
-            "Vs_req": 0, "s_req": None,
-            "s_max": mm_to_cm(d_mm / 2),
-            "status": "No Shear Reinforcement Required (Vu < 0.5 * phi * Vc)",
-            "Av": Av, "Av_bar_cm2": mm2_to_cm2(Av_bar)
-        }
+        trace.append(
+            TraceCheck(
+                code_ref="ACI 318-19 Section 9.6",
+                formula_id="Vu_threshold_no_stirrups",
+                inputs={"Vu_N": Vu_N, "phiVc_N": phi_Vc},
+                value=Vu_N / max(phi_Vc, 1e-9),
+                units="ratio",
+                status="ok",
+            )
+        )
+        return ShearResult(
+            Vc=N_to_kN(Vc),
+            phi_Vc=N_to_kN(phi_Vc),
+            Vs_req=0,
+            s_req=None,
+            s_max=mm_to_cm(d_mm / 2),
+            status="No Shear Reinforcement Required (Vu < 0.5 * phi * Vc)",
+            status_code="ok",
+            Av=Av,
+            Av_bar_cm2=mm2_to_cm2(Av_bar),
+            trace=trace,
+        )
 
     # Required Vs
     Vs_req = (Vu_N / PHI_SHEAR) - Vc
 
     # Check max Vs
     Vs_max = VS_MAX_COEFF * math.sqrt(fc) * b_mm * d_mm
+    trace.append(
+        TraceCheck(
+            code_ref="ACI 318-19 Section 22.5",
+            formula_id="Vs_max",
+            inputs={"fc_MPa": fc, "bw_mm": b_mm, "d_mm": d_mm},
+            value=Vs_max,
+            units="N",
+            status="ok",
+        )
+    )
     if Vs_req > Vs_max:
         logger.warning("Section too small for shear: Vs_req=%.0f > Vs_max=%.0f", Vs_req, Vs_max)
-        return {
-            "Vc": N_to_kN(Vc), "phi_Vc": N_to_kN(phi_Vc),
-            "Vs_req": N_to_kN(Vs_req),
-            "s_req": None, "s_max": None,
-            "status": "Error: Section Dimensions too small for Shear (Vs > Vs_max). Increase Dimensions.",
-            "Av": Av, "Av_bar_cm2": mm2_to_cm2(Av_bar)
-        }
+        trace.append(
+            TraceCheck(
+                code_ref="ACI 318-19 Section 22.5",
+                formula_id="Vs_req_gt_Vs_max",
+                inputs={"Vs_req_N": Vs_req, "Vs_max_N": Vs_max},
+                value=Vs_req,
+                units="N",
+                status="error",
+            )
+        )
+        return ShearResult(
+            Vc=N_to_kN(Vc),
+            phi_Vc=N_to_kN(phi_Vc),
+            Vs_req=N_to_kN(Vs_req),
+            s_req=None,
+            s_max=None,
+            status="Error: Section Dimensions too small for Shear (Vs > Vs_max). Increase Dimensions.",
+            status_code="error",
+            Av=Av,
+            Av_bar_cm2=mm2_to_cm2(Av_bar),
+            trace=trace,
+        )
 
     s_final, s_max_limit = _compute_spacing(Av, fy, d_mm, Vs_req, fc, b_mm)
 
-    return {
-        "Vc": N_to_kN(Vc), "phi_Vc": N_to_kN(phi_Vc),
-        "Vs_req": N_to_kN(max(0, Vs_req)),
-        "s_req": mm_to_cm(s_final),
-        "s_max": mm_to_cm(s_max_limit),
-        "status": "Add Stirrups" if Vs_req > 0 else "Minimum Stirrups Required",
-        "Av": Av, "Av_bar_cm2": mm2_to_cm2(Av_bar)
-    }
+    trace.append(
+        TraceCheck(
+            code_ref="ACI 318-19 Table 9.7.6.2.2",
+            formula_id="stirrup_spacing",
+            inputs={"Av_mm2": Av, "fy_MPa": fy, "d_mm": d_mm, "Vs_req_N": Vs_req},
+            value=s_final,
+            units="mm",
+            status="ok",
+        )
+    )
+    return ShearResult(
+        Vc=N_to_kN(Vc),
+        phi_Vc=N_to_kN(phi_Vc),
+        Vs_req=N_to_kN(max(0, Vs_req)),
+        s_req=mm_to_cm(s_final),
+        s_max=mm_to_cm(s_max_limit),
+        status="Add Stirrups" if Vs_req > 0 else "Minimum Stirrups Required",
+        status_code="ok",
+        Av=Av,
+        Av_bar_cm2=mm2_to_cm2(Av_bar),
+        trace=trace,
+    )

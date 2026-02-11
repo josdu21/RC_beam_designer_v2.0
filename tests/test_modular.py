@@ -1,12 +1,13 @@
-import sys
 import os
+import sys
 import unittest
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.models.section import BeamSection
 from src.models import flexure, shear, torsion
+from src.models.section import BeamSection
+
 
 class TestModularBeam(unittest.TestCase):
     def setUp(self):

@@ -1,4 +1,5 @@
 import pytest
+
 from src.models.section import BeamSection
 
 
