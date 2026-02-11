@@ -8,6 +8,8 @@ Aplicacion web con Streamlit para el diseno de vigas de concreto reforzado segun
 - **Cortante**: Diseno de estribos con metodo simplificado
 - **Torsion**: Verificacion de umbral, adecuacion de seccion y refuerzo requerido
 - **Reporte**: Resumen consolidado de todo el diseno
+- **Trazabilidad ACI**: Salida con verificaciones normativas (`trace`) por modulo
+- **Estado central de diseno**: Coherencia entre pestanas y reporte
 
 ## Requisitos
 
@@ -55,4 +57,12 @@ tests/                          # Tests unitarios (pytest)
 
 ```bash
 python -m pytest tests/ -v
+```
+
+## Calidad de codigo
+
+```bash
+pip install -r requirements-dev.txt
+python -m ruff check src tests
+python -m mypy src/models
 ```
