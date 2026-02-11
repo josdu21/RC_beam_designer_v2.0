@@ -5,6 +5,7 @@ from typing import Any
 
 from src.models import flexure, shear, torsion
 from src.models.design_inputs import DesignInputs
+from src.models.flexure_checklist import build_flexure_checklist, build_flexure_summary
 from src.models.section import BeamSection
 from src.models.torsion_distribution import distribute_torsion_longitudinal_reinf
 
@@ -16,6 +17,8 @@ class ReportBundle:
     shear_res: Any
     torsion_res: Any
     torsion_dist: Any
+    flexure_checklist: list[dict[str, str]]
+    flexure_summary: list[dict[str, Any]]
     warnings: list[str]
     governing_criteria: list[dict[str, str]]
 
@@ -26,6 +29,8 @@ class ReportBundle:
             "shear": self.shear_res.to_dict(),
             "torsion": self.torsion_res.to_dict(),
             "torsion_distribution": self.torsion_dist.to_dict(),
+            "flexure_checklist": self.flexure_checklist,
+            "flexure_summary": self.flexure_summary,
             "warnings": self.warnings,
             "governing_criteria": self.governing_criteria,
         }
@@ -57,12 +62,22 @@ def build_design_report(section: BeamSection, design_inputs: DesignInputs) -> Re
         {"mecanismo": "Torsión", "criterio_aci": "ACI 318-19 Sec. 22.7 / Eq. 9.6.4.3(a)", "estado": res_tors.status},
     ]
 
+    flexure_summary = [
+        build_flexure_summary("Inferior (+)", res_flex_pos),
+        build_flexure_summary("Superior (-)", res_flex_neg),
+    ]
+    flexure_checklist = build_flexure_checklist("Inferior (+)", res_flex_pos) + build_flexure_checklist(
+        "Superior (-)", res_flex_neg
+    )
+
     return ReportBundle(
         flexure_pos=res_flex_pos,
         flexure_neg=res_flex_neg,
         shear_res=res_shear,
         torsion_res=res_tors,
         torsion_dist=dist,
+        flexure_checklist=flexure_checklist,
+        flexure_summary=flexure_summary,
         warnings=warnings,
         governing_criteria=governing,
     )
