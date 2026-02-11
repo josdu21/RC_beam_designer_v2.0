@@ -30,32 +30,79 @@ def render(section):
     res_shear = shear.calculate_shear(section, vu)
     res_tors = torsion.calculate_torsion(section, tu, vu_torsion)
 
+    # Torsion longitudinal distribution from session state
+    al_total = st.session_state.get("al_torsion_total", res_tors.get('Al_req', 0))
+    al_bottom = st.session_state.get("al_torsion_bottom", al_total / 3)
+    al_top = st.session_state.get("al_torsion_top", al_total / 3)
+    al_side = st.session_state.get("al_torsion_side", al_total / 6)
+    torsion_significant = "Required" in res_tors.get('status', '') or al_total > 0
+
+    # ──────────────────────────────────────────────────────────────
+    # 1. REFUERZO LONGITUDINAL
+    # ──────────────────────────────────────────────────────────────
     st.subheader("1. Refuerzo Longitudinal")
 
-    al_torsion = res_tors.get('Al_req', 0)
+    as_flex_bot = res_flex_pos['As_design']
+    as_flex_top = res_flex_neg['As_design']
 
-    long_data = {
-        "Ubicacion": [
-            "Inferior (Flexion +)",
-            "Superior (Flexion -)",
-            "Longitudinal Torsion (Total)",
-            "TOTAL Inferior Estimado"
-        ],
-        "As Requerido (cm2)": [
-            f"{res_flex_pos['As_design']:.2f}",
-            f"{res_flex_neg['As_design']:.2f}",
-            f"{al_torsion:.2f}",
-            f"{(res_flex_pos['As_design'] + al_torsion / 3):.2f} *"
-        ],
-        "Comentarios": [
-            res_flex_pos['status'],
-            res_flex_neg['status'] if mu_neg > 0 else "Sin momento negativo",
-            "Distribuir en perimetro",
-            "* Asumiendo 1/3 Al abajo"
-        ]
-    }
-    st.table(pd.DataFrame(long_data))
+    if torsion_significant:
+        st.markdown("**Combinacion Flexion + Torsion Longitudinal (ACI 318-19)**")
 
+        # Combined table
+        combined_data = {
+            "Cara": ["Inferior", "Superior", "Lateral (c/u)"],
+            "As Flexion (cm2)": [
+                f"{as_flex_bot:.2f}",
+                f"{as_flex_top:.2f}",
+                "---"
+            ],
+            "Al Torsion (cm2)": [
+                f"{al_bottom:.2f}",
+                f"{al_top:.2f}",
+                f"{al_side:.2f}"
+            ],
+            "TOTAL (cm2)": [
+                f"{(as_flex_bot + al_bottom):.2f}",
+                f"{(as_flex_top + al_top):.2f}",
+                f"{al_side:.2f}"
+            ],
+        }
+        st.table(pd.DataFrame(combined_data))
+
+        # Summary metrics
+        total_bot = as_flex_bot + al_bottom
+        total_top = as_flex_top + al_top
+
+        mc1, mc2, mc3 = st.columns(3)
+        mc1.metric("As Total Inferior", f"{total_bot:.2f} cm2",
+                   delta=f"+{al_bottom:.2f} por torsion" if al_bottom > 0 else None)
+        mc2.metric("As Total Superior", f"{total_top:.2f} cm2",
+                   delta=f"+{al_top:.2f} por torsion" if al_top > 0 else None)
+        mc3.metric("As Lateral (c/lado)", f"{al_side:.2f} cm2")
+
+        st.caption("Nota: El acero por torsion longitudinal se suma al acero por flexion en cada cara. "
+                   "El acero lateral es adicional y se coloca en las caras del alma.")
+
+    else:
+        # No significant torsion - simple table
+        long_data = {
+            "Ubicacion": ["Inferior (Flexion +)", "Superior (Flexion -)"],
+            "As Requerido (cm2)": [
+                f"{as_flex_bot:.2f}",
+                f"{as_flex_top:.2f}"
+            ],
+            "Comentarios": [
+                res_flex_pos['status'],
+                res_flex_neg['status'] if mu_neg > 0 else "Sin momento negativo"
+            ]
+        }
+        st.table(pd.DataFrame(long_data))
+        st.info("Torsion despreciable - no se requiere acero longitudinal adicional por torsion.")
+
+    # ──────────────────────────────────────────────────────────────
+    # 2. REFUERZO TRANSVERSAL
+    # ──────────────────────────────────────────────────────────────
+    st.divider()
     st.subheader("2. Refuerzo Transversal (Estribos)")
 
     st.write(f"**Cortante Vs:** {res_shear.get('Vs_req', 0):.2f} kN")
