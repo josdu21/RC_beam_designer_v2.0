@@ -1,16 +1,24 @@
 import streamlit as st
+
 from src.models import torsion
+from src.models.torsion_distribution import distribute_torsion_longitudinal_reinf
 from src.ui import plotting
+from src.ui.design_state import get_design_snapshot, init_design_state, update_design_inputs
+
 
 def render(section):
-    st.header("Diseno por Torsion (T)")
-    st.markdown("Verificacion segun ACI 318-19 Cap. 22.7")
+    st.header("Diseño por Torsión (T)")
+    st.markdown("Verificación según ACI 318-19 Cap. 22.7")
+    init_design_state(st.session_state)
+    snapshot = get_design_snapshot(st.session_state)
 
     col1, col2 = st.columns(2)
     with col1:
-        Tu = st.number_input("Torsion Ultima (Tu) [kNm]", 0.0, None, 15.0, 1.0, key="Tu")
+        Tu = st.number_input("Torsión Última (Tu) [kNm]", 0.0, None, snapshot.tu, 1.0, key="Tu")
     with col2:
-        Vu = st.number_input("Cortante Concomitante (Vu) [kN]", 0.0, None, 50.0, 5.0, key="Vu_torsion")
+        Vu = st.number_input("Cortante Concomitante (Vu) [kN]", 0.0, None, snapshot.vu_torsion, 5.0, key="Vu_torsion")
+
+    update_design_inputs(st.session_state, tu=Tu, vu_torsion=Vu)
 
     res = torsion.calculate_torsion(section, Tu, Vu)
 
@@ -19,13 +27,13 @@ def render(section):
     # Threshold check
     c1, c2, c3 = st.columns(3)
     c1.metric("Tu (Aplicado)", f"{Tu:.2f} kNm")
-    c2.metric("T_th (Umbral)", f"{res['T_th']:.2f} kNm", help="Torsion umbral para despreciar efectos")
-    c3.metric("T_cr (Agrietamiento)", f"{res['T_cr']:.2f} kNm", help="Torsion de agrietamiento")
+    c2.metric("T_th (Umbral)", f"{res['T_th']:.2f} kNm", help="Torsión umbral para despreciar efectos")
+    c3.metric("T_cr (Agrietamiento)", f"{res['T_cr']:.2f} kNm", help="Torsión de agrietamiento")
 
     # Status Logic
     if "Neglectable" in res['status']:
         st.success(res['status'])
-        st.info("No se requiere refuerzo especifico por torsion.")
+        st.info("No se requiere refuerzo específico por torsión.")
     elif "Error" in res['status']:
         st.error(res['status'])
         st.write(f"Verificacion Seccion: {res['check_cross_section']}")
@@ -43,69 +51,47 @@ def render(section):
         with rc2:
             st.markdown("#### Refuerzo Longitudinal Adicional")
             st.metric("Al Total", f"{res.get('Al_req', 0):.2f} cm2")
-            st.caption("Distribuir en el perimetro de la seccion (ACI 9.5.4.3)")
+            st.caption("Distribuir en el perímetro de la sección (ACI 9.5.4.3)")
 
         # --- Distribution of Al along perimeter ---
         al_total = res.get('Al_req', 0)
         if al_total > 0:
             st.divider()
-            st.subheader("Distribucion de Al en el Perimetro")
-            st.caption("ACI 318-19 Sec. 9.5.4.3: Al se distribuye alrededor del perimetro de los estribos cerrados, "
-                       "con separacion max. 300 mm. Al menos una barra en cada esquina.")
-
-            b_inner = section.b - 2 * section.cover
-            h_inner = section.h - 2 * section.cover
-            ph = 2 * (b_inner + h_inner)  # perimeter in cm
-
-            # Proportional distribution by face length
-            al_bottom = al_total * b_inner / ph
-            al_top = al_total * b_inner / ph
-            al_side_each = al_total * h_inner / ph  # per side
+            st.subheader("Distribución de Al en el Perímetro")
+            st.caption("ACI 318-19 Sec. 9.5.4.3: Al se distribuye alrededor del perímetro de los estribos cerrados, "
+                       "con separación máx. 300 mm y al menos una barra en cada esquina.")
 
             n_bars = st.number_input(
-                "Numero total de barras longitudinales por torsion",
-                min_value=4, max_value=20, value=6, step=2,
+                "Número total de barras longitudinales por torsión",
+                min_value=4, max_value=20, value=max(4, snapshot.n_bars_torsion), step=2,
                 key="n_bars_torsion",
-                help="Minimo 4 (una por esquina). Distribuir simetricamente."
+                help="Mínimo 4 (una por esquina). Distribuir simétricamente."
             )
-
-            al_per_bar = al_total / n_bars
-
-            # Distribution: 2 corners bottom + extra, 2 corners top + extra, sides
-            n_bottom = max(2, round(n_bars * b_inner / ph))
-            n_top = max(2, round(n_bars * b_inner / ph))
-            n_sides = n_bars - n_bottom - n_top
-            if n_sides < 0:
-                n_sides = 0
-                n_bottom = n_bars // 2
-                n_top = n_bars - n_bottom
-            n_side_each = max(0, n_sides // 2)
-            # Adjust if odd remainder
-            if n_sides % 2 != 0:
-                n_bottom += 1
-                n_sides -= 1
-                n_side_each = n_sides // 2
-
-            al_bottom_actual = n_bottom * al_per_bar
-            al_top_actual = n_top * al_per_bar
-            al_side_actual = n_side_each * al_per_bar
+            dist = distribute_torsion_longitudinal_reinf(
+                al_total=al_total,
+                b_cm=section.b,
+                h_cm=section.h,
+                cover_cm=section.cover,
+                n_bars=n_bars,
+            )
+            update_design_inputs(st.session_state, n_bars_torsion=n_bars)
 
             dc1, dc2, dc3 = st.columns(3)
-            dc1.metric("Cara Inferior", f"{al_bottom_actual:.2f} cm2",
-                       help=f"{n_bottom} barras x {al_per_bar:.2f} cm2")
-            dc2.metric("Cara Superior", f"{al_top_actual:.2f} cm2",
-                       help=f"{n_top} barras x {al_per_bar:.2f} cm2")
-            dc3.metric("Cada Cara Lateral", f"{al_side_actual:.2f} cm2",
-                       help=f"{n_side_each} barras x {al_per_bar:.2f} cm2" if n_side_each > 0 else "Incluido en caras sup/inf")
+            dc1.metric("Cara Inferior", f"{dist.al_bottom:.2f} cm2",
+                       help=f"{dist.n_bottom} barras x {dist.al_per_bar:.2f} cm2")
+            dc2.metric("Cara Superior", f"{dist.al_top:.2f} cm2",
+                       help=f"{dist.n_top} barras x {dist.al_per_bar:.2f} cm2")
+            dc3.metric("Cada Cara Lateral", f"{dist.al_side_each:.2f} cm2",
+                       help=f"{dist.n_side_each} barras x {dist.al_per_bar:.2f} cm2" if dist.n_side_each > 0 else "Incluido en caras sup/inf")
 
-            st.info(f"Area por barra: **{al_per_bar:.2f} cm2** ({n_bars} barras total)")
+            st.info(f"Área por barra: **{dist.al_per_bar:.2f} cm2** ({dist.n_bars} barras total)")
 
             # Store distribution in session state for report tab
-            st.session_state["al_torsion_bottom"] = al_bottom_actual
-            st.session_state["al_torsion_top"] = al_top_actual
-            st.session_state["al_torsion_side"] = al_side_actual
+            st.session_state["al_torsion_bottom"] = dist.al_bottom
+            st.session_state["al_torsion_top"] = dist.al_top
+            st.session_state["al_torsion_side"] = dist.al_side_each
             st.session_state["al_torsion_total"] = al_total
-            st.session_state["al_torsion_n_bars"] = n_bars
+            st.session_state["al_torsion_n_bars"] = dist.n_bars
         else:
             st.session_state["al_torsion_bottom"] = 0.0
             st.session_state["al_torsion_top"] = 0.0

@@ -1,18 +1,26 @@
 import streamlit as st
+
 from src.models import shear
 from src.ui import plotting
+from src.ui.design_state import get_design_snapshot, init_design_state, update_design_inputs
+
 
 def render(section):
-    st.header("Diseno por Cortante (V)")
+    st.header("Diseño por Cortante (V)")
+    init_design_state(st.session_state)
+    snapshot = get_design_snapshot(st.session_state)
 
     col1, col2 = st.columns(2)
     with col1:
-        Vu = st.number_input("Cortante Ultimo (Vu) [kN]", 0.0, None, 50.0, 5.0, key="Vu")
+        Vu = st.number_input("Cortante Último (Vu) [kN]", 0.0, None, snapshot.vu, 5.0, key="Vu")
     with col2:
-        stirrup_bar = st.selectbox("Diametro Estribo", ["#3 (3/8\")", "#4 (1/2\")"], key="stirrup_bar")
-        n_legs = st.number_input("Ramas", 2, 4, 2, key="n_legs")
+        bars = ['#3 (3/8")', '#4 (1/2")']
+        selected_index = bars.index(snapshot.stirrup_bar) if snapshot.stirrup_bar in bars else 0
+        stirrup_bar = st.selectbox("Diámetro Estribo", bars, index=selected_index, key="stirrup_bar")
+        n_legs = st.number_input("Ramas", 2, 4, snapshot.n_legs, key="n_legs")
 
     bar_diam = 0.95 if stirrup_bar.startswith("#3") else 1.27
+    update_design_inputs(st.session_state, vu=Vu, n_legs=n_legs, stirrup_bar=stirrup_bar)
 
     res = shear.calculate_shear(section, Vu, n_legs, bar_diam)
 

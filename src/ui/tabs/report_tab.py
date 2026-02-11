@@ -1,49 +1,64 @@
-import streamlit as st
+import json
+
 import pandas as pd
-from src.models import flexure, shear, torsion
+import streamlit as st
+
+from src.models.reporting import build_design_report
+from src.ui.design_state import get_design_snapshot, init_design_state
+
 
 def render(section):
-    st.header("Reporte Resumen de Diseno")
+    st.header("Reporte Resumen de Diseño")
+    init_design_state(st.session_state)
 
-    # Read values from session state (set by other tabs via key= parameter)
-    mu_pos = st.session_state.get("mu_pos", 100.0)
-    mu_neg = st.session_state.get("mu_neg", 0.0)
-    vu = st.session_state.get("Vu", 50.0)
-    tu = st.session_state.get("Tu", 15.0)
-    vu_torsion = st.session_state.get("Vu_torsion", vu)
+    # Sync widget-only keys into central state (supports old navigation order)
+    if "mu_pos" in st.session_state:
+        st.session_state["design_inputs"]["mu_pos"] = st.session_state["mu_pos"]
+    if "mu_neg" in st.session_state:
+        st.session_state["design_inputs"]["mu_neg"] = st.session_state["mu_neg"]
+    if "Vu" in st.session_state:
+        st.session_state["design_inputs"]["vu"] = st.session_state["Vu"]
+    if "Tu" in st.session_state:
+        st.session_state["design_inputs"]["tu"] = st.session_state["Tu"]
+    if "Vu_torsion" in st.session_state:
+        st.session_state["design_inputs"]["vu_torsion"] = st.session_state["Vu_torsion"]
+    if "n_legs" in st.session_state:
+        st.session_state["design_inputs"]["n_legs"] = st.session_state["n_legs"]
+    if "stirrup_bar" in st.session_state:
+        st.session_state["design_inputs"]["stirrup_bar"] = st.session_state["stirrup_bar"]
+    if "n_bars_torsion" in st.session_state:
+        st.session_state["design_inputs"]["n_bars_torsion"] = st.session_state["n_bars_torsion"]
 
-    # Show current design loads as read-only summary
+    snapshot = get_design_snapshot(st.session_state)
+    bundle = build_design_report(section, snapshot)
+
     st.subheader("Cargas de Diseno")
-    st.caption("Valores tomados de las pestanas de diseno. Modifiquelos en sus pestanas respectivas.")
+    st.caption("Valores tomados del estado central de diseño para mantener consistencia entre pestañas.")
 
     lc1, lc2, lc3, lc4 = st.columns(4)
-    lc1.metric("Mu+ [kNm]", f"{mu_pos:.1f}")
-    lc2.metric("Mu- [kNm]", f"{mu_neg:.1f}")
-    lc3.metric("Vu [kN]", f"{vu:.1f}")
-    lc4.metric("Tu [kNm]", f"{tu:.1f}")
+    lc1.metric("Mu+ [kNm]", f"{snapshot.mu_pos:.1f}")
+    lc2.metric("Mu- [kNm]", f"{snapshot.mu_neg:.1f}")
+    lc3.metric("Vu [kN]", f"{snapshot.vu:.1f}")
+    lc4.metric("Tu [kNm]", f"{snapshot.tu:.1f}")
 
     st.divider()
-
-    # Run Calculations
-    res_flex_pos = flexure.calculate_flexure(section, mu_pos)
-    res_flex_neg = flexure.calculate_flexure(section, mu_neg)
-    res_shear = shear.calculate_shear(section, vu)
-    res_tors = torsion.calculate_torsion(section, tu, vu_torsion)
-
-    # Torsion longitudinal distribution from session state
-    al_total = st.session_state.get("al_torsion_total", res_tors.get('Al_req', 0))
-    al_bottom = st.session_state.get("al_torsion_bottom", al_total / 3)
-    al_top = st.session_state.get("al_torsion_top", al_total / 3)
-    al_side = st.session_state.get("al_torsion_side", al_total / 6)
-    torsion_significant = "Required" in res_tors.get('status', '') or al_total > 0
+    res_flex_pos = bundle.flexure_pos
+    res_flex_neg = bundle.flexure_neg
+    res_shear = bundle.shear_res
+    res_tors = bundle.torsion_res
+    dist = bundle.torsion_dist
+    torsion_significant = "Required" in res_tors.status or dist.al_total > 0
+    al_bottom = dist.al_bottom
+    al_top = dist.al_top
+    al_side = dist.al_side_each
 
     # ──────────────────────────────────────────────────────────────
     # 1. REFUERZO LONGITUDINAL
     # ──────────────────────────────────────────────────────────────
     st.subheader("1. Refuerzo Longitudinal")
 
-    as_flex_bot = res_flex_pos['As_design']
-    as_flex_top = res_flex_neg['As_design']
+    as_flex_bot = res_flex_pos.As_design
+    as_flex_top = res_flex_neg.As_design
 
     if torsion_significant:
         st.markdown("**Combinacion Flexion + Torsion Longitudinal (ACI 318-19)**")
@@ -92,12 +107,12 @@ def render(section):
                 f"{as_flex_top:.2f}"
             ],
             "Comentarios": [
-                res_flex_pos['status'],
-                res_flex_neg['status'] if mu_neg > 0 else "Sin momento negativo"
+                res_flex_pos.status,
+                res_flex_neg.status if snapshot.mu_neg > 0 else "Sin momento negativo"
             ]
         }
         st.table(pd.DataFrame(long_data))
-        st.info("Torsion despreciable - no se requiere acero longitudinal adicional por torsion.")
+        st.info("Torsión despreciable: no se requiere acero longitudinal adicional por torsión.")
 
     # ──────────────────────────────────────────────────────────────
     # 2. REFUERZO TRANSVERSAL
@@ -105,24 +120,55 @@ def render(section):
     st.divider()
     st.subheader("2. Refuerzo Transversal (Estribos)")
 
-    st.write(f"**Cortante Vs:** {res_shear.get('Vs_req', 0):.2f} kN")
+    st.write(f"**Cortante Vs:** {res_shear.Vs_req:.2f} kN")
 
-    if "Neglectable" in res_tors['status']:
-        st.success("Torsion despreciable. Disenar solo por Cortante.")
-        s_req = res_shear.get('s_req')
+    if "Neglectable" in res_tors.status:
+        st.success("Torsión despreciable. Diseñar solo por cortante.")
+        s_req = res_shear.s_req
         if s_req is not None:
             st.metric("Separacion Estribos (Cortante)", f"{s_req:.1f} cm")
         else:
-            st.info(res_shear['status'])
-    elif "Error" in res_tors['status']:
-        st.error("Error en Torsion: " + res_tors['status'])
+            st.info(res_shear.status)
+    elif "Error" in res_tors.status:
+        st.error("Error en Torsión: " + res_tors.status)
     else:
-        st.warning("Torsion Significativa. Se requieren estribos cerrados.")
+        st.warning("Torsión significativa. Se requieren estribos cerrados.")
 
         col_res1, col_res2 = st.columns(2)
-        s_req = res_shear.get('s_req')
+        s_req = res_shear.s_req
         if s_req is not None:
             col_res1.metric("Estribos por Cortante", f"s = {s_req:.1f} cm")
         else:
-            col_res1.info(res_shear['status'])
-        col_res2.metric("Refuerzo Torsion (At/s)", f"{res_tors.get('At_s_req_cm2_m', 0):.2f} cm2/m")
+            col_res1.info(res_shear.status)
+        col_res2.metric("Refuerzo Torsion (At/s)", f"{res_tors.At_s_req_cm2_m:.2f} cm2/m")
+
+    st.divider()
+    st.subheader("3. Criterios ACI Gobernantes")
+    st.table(pd.DataFrame(bundle.governing_criteria))
+
+    st.subheader("4. Advertencias Activas")
+    if bundle.warnings:
+        for warning in bundle.warnings:
+            st.warning(warning)
+    else:
+        st.success("Sin advertencias activas para el conjunto actual de diseño.")
+
+    st.divider()
+    st.subheader("5. Exportación")
+    payload = bundle.export_payload()
+    criteria_df = pd.DataFrame(bundle.governing_criteria)
+    csv_data = criteria_df.to_csv(index=False).encode("utf-8")
+
+    cexp1, cexp2 = st.columns(2)
+    cexp1.download_button(
+        label="Descargar criterios (CSV)",
+        data=csv_data,
+        file_name="rc_beam_governing_criteria.csv",
+        mime="text/csv",
+    )
+    cexp2.download_button(
+        label="Descargar reporte técnico (JSON)",
+        data=json.dumps(payload, indent=2, ensure_ascii=False),
+        file_name="rc_beam_report_payload.json",
+        mime="application/json",
+    )

@@ -2,6 +2,7 @@ import logging
 import streamlit as st
 from src.models.section import BeamSection
 from src.ui.tabs import flexure_tab, shear_tab, torsion_tab, report_tab
+from src.ui.design_state import init_design_state
 
 logging.basicConfig(level=logging.INFO, format="%(name)s - %(levelname)s - %(message)s")
 
@@ -29,6 +30,7 @@ except ValueError as e:
 
 # Main App
 st.title("🏗️ Diseñador de Vigas RC - Modular")
+init_design_state(st.session_state)
 
 tab_flexure, tab_shear, tab_torsion, tab_report = st.tabs(["🔄 Flexión", "✂️ Cortante", "🌀 Torsión", "📄 Reporte"])
 
